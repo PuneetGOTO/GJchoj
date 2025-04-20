@@ -143,7 +143,6 @@ async def get_all_giveaway_ids() -> list[int]:
 # --- 科技感 Embed 消息函数 ---
 def create_giveaway_embed(prize: str, end_time: datetime.datetime, winners: int, creator: nextcord.User | nextcord.Member, required_role: nextcord.Role | None, status: str = "running"):
     """创建用于展示抽奖信息的 Embed 对象 (运行中状态)。"""
-    # ... (代码与之前版本相同) ...
     embed = nextcord.Embed(
         title="<a:_:1198114874891632690> **赛博抽奖进行中!** <a:_:1198114874891632690>", # 标题 (可用动态 Emoji)
         description=f"点击 🎉 表情参与!\n\n**奖品:** `{prize}`", # 描述
@@ -162,7 +161,6 @@ def create_giveaway_embed(prize: str, end_time: datetime.datetime, winners: int,
 
 def update_embed_ended(embed: nextcord.Embed, winner_mentions: str | None, prize: str, participant_count: int):
      """更新 Embed 对象以显示抽奖结束状态。"""
-     # ... (代码与之前版本相同) ...
      embed.title = "<:check:1198118533916270644> **抽奖已结束** <:check:1198118533916270644>"
      embed.color = 0x36393F
      embed.clear_fields()
@@ -277,7 +275,6 @@ async def giveaway(interaction: nextcord.Interaction):
 @giveaway.subcommand(name="create", description="🎉 发起一个新的抽奖活动！")
 async def giveaway_create(interaction: nextcord.Interaction, duration: str = ..., winners: int = ..., prize: str = ..., channel: nextcord.abc.GuildChannel = None, required_role: nextcord.Role = None):
     """处理 /giveaway create 命令。"""
-    # ... (代码与之前版本相同，检查权限、解析时间、发送消息、存入 Redis) ...
     await interaction.response.defer(ephemeral=True)
     target_channel = channel or interaction.channel
     if not isinstance(target_channel, nextcord.TextChannel):
@@ -315,10 +312,9 @@ async def giveaway_create(interaction: nextcord.Interaction, duration: str = ...
 
 
 @giveaway.subcommand(name="reroll", description="<:reroll:1198121147395555328> 为指定的抽奖重新抽取获胜者。")
+@commands.has_permissions(manage_guild=True) # 添加权限检查
 async def giveaway_reroll(interaction: nextcord.Interaction, message_link_or_id: str = ...):
     """处理 /giveaway reroll 命令。"""
-    # ... (代码与之前版本相同，注意权限检查) ...
-    # 建议添加权限检查: @commands.has_permissions(manage_guild=True)
     await interaction.response.defer(ephemeral=True)
     message_id = None; channel_id = None
     try:
@@ -358,6 +354,11 @@ async def giveaway_reroll(interaction: nextcord.Interaction, message_link_or_id:
     except Exception as e: print(f"Error edit msg after reroll {message_id}: {e}")
     await interaction.followup.send(f"✅ 已为 `{prize}` 重抽。新获奖者: {new_winner_mentions}", ephemeral=True)
 
+@giveaway_reroll.error # 添加 reroll 的错误处理
+async def reroll_error(interaction: nextcord.Interaction, error):
+    if isinstance(error, commands.MissingPermissions): await interaction.response.send_message("抱歉，你没有权限执行此命令。", ephemeral=True)
+    else: await interaction.response.send_message(f"执行 reroll 命令出错: {error}", ephemeral=True); print(f"Error in reroll cmd: {error}")
+
 
 @giveaway.subcommand(name="pickwinner", description="👑 [管理员] 手动指定中奖者并结束抽奖。")
 @commands.has_permissions(manage_guild=True) # 限制权限
@@ -393,13 +394,30 @@ async def giveaway_pickwinner(
     original_embed = message.embeds[0]
 
     # --- 获取奖品名称 ---
-    giveaway_data = await load_giveaway_data(message_id); prize = "未知奖品"
-    if giveaway_data: prize = giveaway_data.get('prize', prize)
-    else: # Fallback embed parsing
-        if original_embed.description: prize_line=next((l for l in original_embed.description.split('\n') if l.lower().startswith('**prize:**')),None);
-        if prize_line: try: prize = prize_line.split('`')[1]; except IndexError: pass
+    giveaway_data = await load_giveaway_data(message_id)
+    prize = "未知奖品" # 设置默认值
 
-    # --- 收集指定中奖者 ---
+    if giveaway_data:
+        prize = giveaway_data.get('prize', prize) # 优先从 Redis 数据获取
+    else:
+        # 如果 Redis 没有数据，尝试从 Embed 解析
+        print(f"无法从 Redis 加载抽奖 {message_id} 数据 (pickwinner), 尝试从 Embed 解析奖品...")
+        if original_embed.description:
+            # 查找包含 "**prize:**" 的行 (修正: 添加 strip() 去除可能的前后空格)
+            prize_line = next((line for line in original_embed.description.split('\n') if line.lower().strip().startswith('**prize:**')), None)
+            # --- 这里是修正后的代码块 ---
+            if prize_line:
+                # 尝试从 `**Prize:** \`Prize Name\`` 格式中提取
+                try:
+                    prize = prize_line.split('`')[1]
+                    print(f"从 Embed 解析到奖品: {prize}")
+                except IndexError:
+                    # 如果格式不匹配（例如没有反引号或只有一个），则忽略错误，保持默认值
+                    print("从 Embed 解析奖品失败: 格式不匹配或缺少反引号。")
+                    pass # 保持 prize 为 "未知奖品"
+            # --- 修正后的代码块结束 ---
+
+    # --- 收集指定的中奖者 ---
     specified_winners = [w for w in [winner1, winner2, winner3] if w is not None]
     if not specified_winners: await interaction.followup.send("错误：必须至少指定一位中奖者。", ephemeral=True); return
     winner_mentions = ", ".join([w.mention for w in specified_winners])
@@ -417,7 +435,7 @@ async def giveaway_pickwinner(
         await message.edit(embed=updated_embed, view=None)
     except Exception as e: print(f"无法编辑 pickwinner 消息 {message_id}: {e}")
 
-    # --- 清理 Redis ---
+    # --- 清理 Redis 数据 ---
     await delete_giveaway_data(message_id)
     print(f"已手动结束并从 Redis 移除抽奖 {message_id} (pickwinner)。")
     await interaction.followup.send(f"✅ 已成功指定 `{prize}` 中奖者为 {winner_mentions} 并结束。", ephemeral=True)
@@ -460,8 +478,7 @@ async def giveaway_end(
     # --- 加载抽奖数据 ---
     giveaway_data = await load_giveaway_data(message_id)
     if not giveaway_data:
-        # 检查是否已经被结束（例如 Embed 标题已改变）
-        if message.embeds and "结束" in message.embeds[0].title:
+        if message.embeds and ("结束" in message.embeds[0].title or "ENDED" in message.embeds[0].footer.text): # 更可靠地检查是否结束
              await interaction.followup.send("该抽奖似乎已经结束了。", ephemeral=True)
         else:
              await interaction.followup.send("错误：无法从 Redis 加载此抽奖的数据，可能已被处理或数据丢失。", ephemeral=True)
@@ -469,7 +486,7 @@ async def giveaway_end(
 
     # --- 调用核心开奖逻辑 ---
     print(f"用户 {interaction.user} 手动结束抽奖 {message_id}...")
-    await process_giveaway_end(message, giveaway_data)
+    await process_giveaway_end(message, giveaway_data) # <--- 调用重构的函数
 
     # --- 清理 Redis 数据 ---
     await delete_giveaway_data(message_id)
@@ -497,15 +514,12 @@ async def check_giveaways():
     for message_id in giveaway_ids:
         giveaway_data = await load_giveaway_data(message_id)
         if not giveaway_data:
-            # print(f"Data for giveaway {message_id} disappeared before processing.")
-            # await delete_giveaway_data(message_id) # Avoid deleting if just a load error maybe?
             continue
         if not isinstance(giveaway_data.get('end_time'), datetime.datetime):
             print(f"警告: 抽奖 {message_id} 的结束时间格式无效。跳过。")
-            await delete_giveaway_data(message_id) # Clean up bad data
+            await delete_giveaway_data(message_id)
             continue
 
-        # 检查是否到期
         if giveaway_data['end_time'] <= current_time:
             print(f"抽奖 {message_id} 到期，准备处理...")
             guild = bot.get_guild(giveaway_data['guild_id'])
@@ -515,13 +529,12 @@ async def check_giveaways():
             try:
                 message = await channel.fetch_message(message_id)
                 # --- 调用核心开奖逻辑 ---
-                await process_giveaway_end(message, giveaway_data)
+                await process_giveaway_end(message, giveaway_data) # <--- 调用重构的函数
                 ended_giveaway_ids.append(message_id) # 标记为待删除
             except nextcord.NotFound: print(f"原始消息 {message_id} 未找到 (check_giveaways)。"); ended_giveaway_ids.append(message_id) # 消息没了也要清理数据
             except nextcord.Forbidden: print(f"无法获取消息 {message_id} (check_giveaways 权限不足?)。") # 不清理，可能下次能获取
             except Exception as e: print(f"处理到期抽奖 {message_id} 时出错: {e}") # 暂时不清理，等待下次重试
 
-    # 清理本轮成功处理或确定无法处理的抽奖数据
     if ended_giveaway_ids:
         print(f"正在从 Redis 清理已处理或过期的抽奖: {ended_giveaway_ids}")
         for msg_id in ended_giveaway_ids:
@@ -531,7 +544,7 @@ async def check_giveaways():
 async def before_check_giveaways():
     """在后台任务循环开始前执行。"""
     await bot.wait_until_ready()
-    await setup_redis() # 确保 Redis 已连接
+    # await setup_redis() # setup_redis 会在 on_ready 前由 before_loop 调用，但 on_ready 中也检查一下更保险
     print("检查抽奖任务已准备就绪。")
 
 # --- 机器人事件 ---
@@ -542,21 +555,31 @@ async def on_ready():
     print(f'已登录为: {bot.user.name} ({bot.user.id})')
     print(f'Nextcord 版本: {nextcord.__version__}')
     print(f'运行于: {len(bot.guilds)} 个服务器')
+    # 确保 Redis 连接在启动任务前完成
+    if not redis_pool: # 如果 before_loop 的 setup_redis 失败了，这里再尝试一次或报错
+        await setup_redis()
+
     redis_status = "未知"
     if redis_pool:
         try:
-            # Try a quick ping to confirm connection status more reliably
             await redis_pool.ping()
             redis_status = "已连接"
-        except Exception:
-            redis_status = "连接失败"
+        except Exception as e:
+            redis_status = f"连接失败 ({e})" # 显示具体错误
     print(f'Redis 连接池状态: {redis_status}')
     print("-" * 30)
-    if not check_giveaways.is_running():
-        check_giveaways.start()
-        print("已启动后台检查抽奖任务。")
+
+    # 只有在 Redis 确认连接成功后才启动任务
+    if redis_status == "已连接":
+        if not check_giveaways.is_running():
+            check_giveaways.start()
+            print("已启动后台检查抽奖任务。")
+    else:
+        print("警告: 由于 Redis 连接失败，后台检查抽奖任务未启动。")
+
 
 # --- 运行机器人 ---
 if __name__ == "__main__":
     print("正在启动机器人...")
+    # 注意：setup_redis 现在主要由 before_loop 和 on_ready 处理，这里不需要单独调用
     bot.run(BOT_TOKEN)
