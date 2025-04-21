@@ -86,40 +86,65 @@ def parse_duration(duration_str: str) -> datetime.timedelta | None:
     except ValueError:
         return None
 
+# --- 修改后的 save_giveaway_data ---
 async def save_giveaway_data(message_id: int, data: dict):
-    """将抽奖数据保存到 Redis。"""
-    if not redis_pool: return # 如果 Redis 未连接则跳过
+    """将抽奖数据保存到 Redis，确保 datetime 可序列化。"""
+    if not redis_pool: return
     try:
-        key = f"{GIVEAWAY_PREFIX}{message_id}" # 构造 Redis 键名
-        # 将 datetime 对象转换为 ISO 格式字符串，以便 JSON 序列化
-        if isinstance(data.get('end_time'), datetime.datetime):
-            if data['end_time'].tzinfo is None: # 确保时区感知
-                 data['end_time'] = data['end_time'].replace(tzinfo=datetime.timezone.utc)
-            data['end_time_iso'] = data['end_time'].isoformat()
+        key = f"{GIVEAWAY_PREFIX}{message_id}"
 
-        await redis_pool.set(key, json.dumps(data))
+        # 创建一个数据的副本以避免修改原始字典
+        data_to_save = data.copy()
+
+        # 检查副本中的 'end_time' 是否是 datetime 对象
+        if isinstance(data_to_save.get('end_time'), datetime.datetime):
+            # 确保时区感知
+            if data_to_save['end_time'].tzinfo is None:
+                 data_to_save['end_time'] = data_to_save['end_time'].replace(tzinfo=datetime.timezone.utc)
+            # 直接将 datetime 对象转换为 ISO 字符串，并替换掉副本中原来的值
+            data_to_save['end_time'] = data_to_save['end_time'].isoformat()
+            # 不再需要 'end_time_iso' 这个键了
+
+        # 现在 data_to_save 中的 'end_time' 已经是字符串了
+        await redis_pool.set(key, json.dumps(data_to_save))
+
+    except TypeError as e: # 更具体地捕获 TypeError
+        print(f"保存抽奖数据 {message_id} 到 Redis 时出错 (序列化失败): {e}")
+        # 可以考虑打印 data_to_save 的内容来调试
+        # print(f"Data causing serialization error: {data_to_save}")
     except Exception as e:
-        print(f"保存抽奖数据 {message_id} 到 Redis 时出错: {e}")
+        print(f"保存抽奖数据 {message_id} 到 Redis 时发生其他错误: {e}")
 
+# --- 修改后的 load_giveaway_data ---
 async def load_giveaway_data(message_id: int) -> dict | None:
-    """从 Redis 加载抽奖数据。"""
+    """从 Redis 加载抽奖数据，并将 ISO 字符串转回 datetime。"""
     if not redis_pool: return None
     try:
         key = f"{GIVEAWAY_PREFIX}{message_id}"
-        data_str = await redis_pool.get(key) # 从 Redis 获取 JSON 字符串
+        data_str = await redis_pool.get(key)
         if data_str:
-            data = json.loads(data_str) # 将 JSON 字符串解析回字典
-            # 将 ISO 格式字符串转换回 timezone-aware datetime 对象
-            if 'end_time_iso' in data:
-                data['end_time'] = datetime.datetime.fromisoformat(data['end_time_iso'])
+            data = json.loads(data_str)
+
+            # 检查 'end_time' 键的值是否是字符串，如果是，则转换回 datetime 对象
+            if isinstance(data.get('end_time'), str):
+                try:
+                    data['end_time'] = datetime.datetime.fromisoformat(data['end_time'])
+                except ValueError:
+                    # 如果字符串不是有效的 ISO 格式，记录警告但可能保持原样或删除
+                    print(f"警告: 抽奖 {message_id} 的 end_time 格式无效 (非 ISO string?)。")
+                    # 根据需要决定如何处理，例如: del data['end_time'] 或保持字符串
+            # else: # 如果 end_time 不是字符串，可能是旧数据或错误数据
+            #    print(f"警告: 抽奖 {message_id} 的 end_time 不是字符串格式。")
+
             return data
-        return None # 如果键不存在，返回 None
+        return None
     except json.JSONDecodeError:
         print(f"从 Redis 解码抽奖 {message_id} 的 JSON 时出错。")
         return None
     except Exception as e:
         print(f"从 Redis 加载抽奖数据 {message_id} 时出错: {e}")
         return None
+
 
 async def delete_giveaway_data(message_id: int):
     """从 Redis 删除抽奖数据。"""
@@ -303,10 +328,12 @@ async def giveaway_create(interaction: nextcord.Interaction, duration: str = ...
     except Exception as e: await interaction.followup.send(f"创建抽奖时发生意外错误: {e}", ephemeral=True); print(f"Error creating giveaway: {e}"); return
     giveaway_data = {
         'guild_id': interaction.guild.id, 'channel_id': target_channel.id, 'message_id': giveaway_message.id,
-        'end_time': end_time, 'winners': winners, 'prize': prize,
+        'end_time': end_time, # 在 save_giveaway_data 中会被转为字符串
+        'winners': winners, 'prize': prize,
         'required_role_id': required_role.id if required_role else None,
         'creator_id': interaction.user.id, 'creator_name': interaction.user.display_name
     }
+    # 在调用 save 之前，end_time 还是 datetime 对象
     await save_giveaway_data(giveaway_message.id, giveaway_data)
     await interaction.followup.send(f"✅ 奖品为 `{prize}` 的抽奖已在 {target_channel.mention} 创建！ 结束于: <t:{int(end_time.timestamp())}:F>", ephemeral=True)
 
@@ -393,7 +420,7 @@ async def giveaway_pickwinner(
     if not message.embeds: await interaction.followup.send("消息缺少 Embed。", ephemeral=True); return
     original_embed = message.embeds[0]
 
-    # --- 获取奖品名称 ---
+    # --- 获取奖品名称 (包含 SyntaxError 修正) ---
     giveaway_data = await load_giveaway_data(message_id)
     prize = "未知奖品" # 设置默认值
 
@@ -478,7 +505,7 @@ async def giveaway_end(
     # --- 加载抽奖数据 ---
     giveaway_data = await load_giveaway_data(message_id)
     if not giveaway_data:
-        if message.embeds and ("结束" in message.embeds[0].title or "ENDED" in message.embeds[0].footer.text): # 更可靠地检查是否结束
+        if message.embeds and ("结束" in message.embeds[0].title or (message.embeds[0].footer and "已结束" in message.embeds[0].footer.text)): # 更可靠地检查是否结束
              await interaction.followup.send("该抽奖似乎已经结束了。", ephemeral=True)
         else:
              await interaction.followup.send("错误：无法从 Redis 加载此抽奖的数据，可能已被处理或数据丢失。", ephemeral=True)
@@ -515,9 +542,10 @@ async def check_giveaways():
         giveaway_data = await load_giveaway_data(message_id)
         if not giveaway_data:
             continue
+        # 检查 end_time 是否还是 datetime 对象 (理论上 load_giveaway_data 会处理, 但加一层保险)
         if not isinstance(giveaway_data.get('end_time'), datetime.datetime):
-            print(f"警告: 抽奖 {message_id} 的结束时间格式无效。跳过。")
-            await delete_giveaway_data(message_id)
+            print(f"警告: 抽奖 {message_id} 的 end_time 格式无效 (非 datetime 对象)。可能数据已损坏或加载失败。跳过。")
+            # 可以考虑删除: await delete_giveaway_data(message_id)
             continue
 
         if giveaway_data['end_time'] <= current_time:
@@ -544,7 +572,7 @@ async def check_giveaways():
 async def before_check_giveaways():
     """在后台任务循环开始前执行。"""
     await bot.wait_until_ready()
-    # await setup_redis() # setup_redis 会在 on_ready 前由 before_loop 调用，但 on_ready 中也检查一下更保险
+    # setup_redis 现在主要由 on_ready 处理
     print("检查抽奖任务已准备就绪。")
 
 # --- 机器人事件 ---
@@ -556,7 +584,7 @@ async def on_ready():
     print(f'Nextcord 版本: {nextcord.__version__}')
     print(f'运行于: {len(bot.guilds)} 个服务器')
     # 确保 Redis 连接在启动任务前完成
-    if not redis_pool: # 如果 before_loop 的 setup_redis 失败了，这里再尝试一次或报错
+    if not redis_pool:
         await setup_redis()
 
     redis_status = "未知"
@@ -581,5 +609,4 @@ async def on_ready():
 # --- 运行机器人 ---
 if __name__ == "__main__":
     print("正在启动机器人...")
-    # 注意：setup_redis 现在主要由 before_loop 和 on_ready 处理，这里不需要单独调用
     bot.run(BOT_TOKEN)
