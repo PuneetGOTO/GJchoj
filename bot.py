@@ -38,7 +38,6 @@ async def setup_redis():
 GIVEAWAY_PREFIX = "giveaway:"
 
 def parse_duration(duration_str: str) -> datetime.timedelta | None:
-    # ... (代码不变) ...
     duration_str = duration_str.lower().strip(); value_str = ""; unit = ""
     for char in duration_str:
         if char.isdigit() or char == '.': value_str += char
@@ -54,7 +53,6 @@ def parse_duration(duration_str: str) -> datetime.timedelta | None:
     except ValueError: return None
 
 async def save_giveaway_data(message_id: int, data: dict):
-    # ... (代码不变, 使用修正后的版本) ...
     if not redis_pool: return
     try:
         key = f"{GIVEAWAY_PREFIX}{message_id}"
@@ -69,7 +67,6 @@ async def save_giveaway_data(message_id: int, data: dict):
 
 
 async def load_giveaway_data(message_id: int) -> dict | None:
-    # ... (代码不变, 使用修正后的版本) ...
     if not redis_pool: return None
     try:
         key = f"{GIVEAWAY_PREFIX}{message_id}"
@@ -85,68 +82,45 @@ async def load_giveaway_data(message_id: int) -> dict | None:
     except Exception as e: print(f"从 Redis 加载抽奖数据 {message_id} 时出错: {e}"); return None
 
 async def delete_giveaway_data(message_id: int):
-    # ... (代码不变) ...
-    if not redis_pool: return
-    try: key = f"{GIVEAWAY_PREFIX}{message_id}"; await redis_pool.delete(key)
-    except Exception as e: print(f"从 Redis 删除抽奖数据 {message_id} 时出错: {e}")
+     if not redis_pool: return
+     try: key = f"{GIVEAWAY_PREFIX}{message_id}"; await redis_pool.delete(key)
+     except Exception as e: print(f"从 Redis 删除抽奖数据 {message_id} 时出错: {e}")
 
 async def get_all_giveaway_ids() -> list[int]:
-    # ... (代码不变) ...
      if not redis_pool: return []
      try: keys = await redis_pool.keys(f"{GIVEAWAY_PREFIX}*"); return [int(k.split(':')[-1]) for k in keys]
      except Exception as e: print(f"从 Redis 获取抽奖键时出错: {e}"); return []
 
-# --- 新增：消息链接解析辅助函数 ---
 async def parse_message_link(interaction: nextcord.Interaction, link_or_id: str) -> tuple[int | None, int | None]:
-    """
-    解析 Discord 消息链接。
-    成功返回 (channel_id, message_id)，失败则发送错误消息并返回 (None, None)。
-    """
-    message_id = None
-    channel_id = None
-    guild_id_from_link = None
-
+    message_id = None; channel_id = None; guild_id_from_link = None
     try:
         link_parts = link_or_id.strip().split('/')
-        # 检查标准链接结构: https://discord.com/channels/GUILD/CHANNEL/MESSAGE
-        # 修正了这里的检查逻辑
         if len(link_parts) == 7 and link_parts[0] == 'https:' and link_parts[2] == 'discord.com' and link_parts[3] == 'channels':
             try:
-                guild_id_from_link = int(link_parts[4])
-                channel_id = int(link_parts[5])
-                message_id = int(link_parts[6])
-
-                # 确认链接来自当前服务器
+                guild_id_from_link = int(link_parts[4]); channel_id = int(link_parts[5]); message_id = int(link_parts[6])
                 if guild_id_from_link != interaction.guild.id:
-                    # 使用 followup 发送临时消息
-                    await interaction.followup.send("错误：提供的消息链接来自另一个服务器。", ephemeral=True)
-                    return None, None
-            except ValueError:
-                # 如果 ID 部分不是数字
-                await interaction.followup.send("无效的消息链接格式 (ID部分非数字)。", ephemeral=True)
-                return None, None
-        else:
-            # 如果不符合标准链接结构，则提示需要链接
-            await interaction.followup.send("请提供格式正确的 Discord 消息链接 (例如: https://discord.com/channels/...).", ephemeral=True)
-            return None, None
-    except Exception as e:
-        # 其他解析错误
-        await interaction.followup.send(f"解析链接时发生意外错误: {e}", ephemeral=True)
-        print(f"Error parsing link {link_or_id}: {e}")
-        return None, None
-
-    # 如果一切正常，返回解析出的 ID
+                    await interaction.followup.send("错误：提供的消息链接来自另一个服务器。", ephemeral=True); return None, None
+            except ValueError: await interaction.followup.send("无效的消息链接格式 (ID部分非数字)。", ephemeral=True); return None, None
+        else: await interaction.followup.send("请提供格式正确的 Discord 消息链接 (例如: https://discord.com/channels/...).", ephemeral=True); return None, None
+    except Exception as e: await interaction.followup.send(f"解析链接时发生意外错误: {e}", ephemeral=True); print(f"Error parsing link {link_or_id}: {e}"); return None, None
     return channel_id, message_id
 
-# --- 科技感 Embed 消息函数 ---
+# --- 科技感 Embed 消息函数 (包含 SyntaxError 修正) ---
 def create_giveaway_embed(prize: str, end_time: datetime.datetime, winners: int, creator: nextcord.User | nextcord.Member, required_role: nextcord.Role | None, status: str = "running"):
-    # ... (代码不变) ...
-    embed=nextcord.Embed(title="<a:_:1198114874891632690> **赛博抽奖进行中!** <a:_:1198114874891632690>", description=f"点击 🎉 表情参与!\n\n**奖品:** `{prize}`", color=0x00FFFF); embed.add_field(name="<:timer:1198115585629569044> 结束于", value=f"<t:{int(end_time.timestamp())}:R>", inline=True); embed.add_field(name="<:winner:1198115869403988039> 获奖人数", value=f"`{winners}`", inline=True);
-    if required_role: embed.add_field(name="<:requirement:1198116280151654461> 参与条件", value=f"需要拥有 {required_role.mention} 身份组。", inline=False); else: embed.add_field(name="<:requirement:1198116280151654461> 参与条件", value="`无`", inline=False);
-    embed.set_footer(text=f"由 {creator.display_name} 发起 | 状态: {status.upper()}", icon_url=creator.display_avatar.url if creator.display_avatar else None); embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1003591315297738772/1198117400949297172/giveaway-box.png?ex=65bda71e&is=65ab321e&hm=375f317989609026891610d51d14116503d730ffb1ed1f8749f8e8215e911c18&"); return embed
+    embed=nextcord.Embed(title="<a:_:1198114874891632690> **赛博抽奖进行中!** <a:_:1198114874891632690>", description=f"点击 🎉 表情参与!\n\n**奖品:** `{prize}`", color=0x00FFFF)
+    embed.add_field(name="<:timer:1198115585629569044> 结束于", value=f"<t:{int(end_time.timestamp())}:R>", inline=True)
+    embed.add_field(name="<:winner:1198115869403988039> 获奖人数", value=f"`{winners}`", inline=True)
+    # --- 修正后的 if/else 块 ---
+    if required_role:
+        embed.add_field(name="<:requirement:1198116280151654461> 参与条件", value=f"需要拥有 {required_role.mention} 身份组。", inline=False)
+    else:
+        embed.add_field(name="<:requirement:1198116280151654461> 参与条件", value="`无`", inline=False)
+    # --- 修正结束 ---
+    embed.set_footer(text=f"由 {creator.display_name} 发起 | 状态: {status.upper()}", icon_url=creator.display_avatar.url if creator.display_avatar else None)
+    embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1003591315297738772/1198117400949297172/giveaway-box.png?ex=65bda71e&is=65ab321e&hm=375f317989609026891610d51d14116503d730ffb1ed1f8749f8e8215e911c18&")
+    return embed
 
 def update_embed_ended(embed: nextcord.Embed, winner_mentions: str | None, prize: str, participant_count: int):
-     # ... (代码不变) ...
      embed.title="<:check:1198118533916270644> **抽奖已结束** <:check:1198118533916270644>"; embed.color=0x36393F; embed.clear_fields();
      if winner_mentions: embed.description=f"**奖品:** `{prize}`\n\n恭喜以下获奖者！"; embed.add_field(name="<:winner:1198115869403988039> 获奖者", value=winner_mentions, inline=False);
      else: embed.description=f"**奖品:** `{prize}`\n\n本次抽奖没有符合条件的参与者。"; embed.add_field(name="<:cross:1198118636147118171> 获奖者", value="`无`", inline=False);
@@ -156,7 +130,6 @@ def update_embed_ended(embed: nextcord.Embed, winner_mentions: str | None, prize
 
 # --- 核心开奖逻辑函数 ---
 async def process_giveaway_end(message: nextcord.Message, giveaway_data: dict):
-    # ... (代码不变) ...
     guild = message.guild; channel = message.channel; bot_instance = bot
     if not guild or not channel or not isinstance(channel, nextcord.TextChannel): print(f"错误: process_giveaway_end 参数无效 (消息 ID: {message.id})"); return
     print(f"正在处理抽奖结束: {message.id} (奖品: {giveaway_data.get('prize', 'N/A')})")
@@ -190,7 +163,6 @@ async def giveaway(interaction: nextcord.Interaction): pass
 
 @giveaway.subcommand(name="create", description="🎉 发起一个新的抽奖活动！")
 async def giveaway_create(interaction: nextcord.Interaction, duration: str = ..., winners: int = ..., prize: str = ..., channel: nextcord.abc.GuildChannel = None, required_role: nextcord.Role = None):
-    # ... (代码不变) ...
     await interaction.response.defer(ephemeral=True); target_channel = channel or interaction.channel
     if not isinstance(target_channel, nextcord.TextChannel): await interaction.followup.send("错误: 非文字频道。", ephemeral=True); return
     bot_member=interaction.guild.me; permissions=target_channel.permissions_for(bot_member); required_perms={"send_messages": permissions.send_messages, "embed_links": permissions.embed_links, "add_reactions": permissions.add_reactions, "read_message_history": permissions.read_message_history, "manage_messages": permissions.manage_messages}; missing_perms=[p for p,h in required_perms.items() if not h]
@@ -209,17 +181,14 @@ async def giveaway_create(interaction: nextcord.Interaction, duration: str = ...
 @commands.has_permissions(manage_guild=True)
 async def giveaway_reroll(interaction: nextcord.Interaction, message_link_or_id: str = ...):
     await interaction.response.defer(ephemeral=True)
-    # --- 使用辅助函数解析 ---
     channel_id, message_id = await parse_message_link(interaction, message_link_or_id)
     if channel_id is None or message_id is None: return
-    # --- 获取频道和消息 ---
     target_channel = bot.get_channel(channel_id)
     if not target_channel: await interaction.followup.send("错误：无法找到链接中的频道。", ephemeral=True); return
     try: message = await target_channel.fetch_message(message_id)
     except nextcord.NotFound: await interaction.followup.send("无法找到原始抽奖消息。", ephemeral=True); return
     except nextcord.Forbidden: await interaction.followup.send(f"无权限在 {target_channel.mention} 读取历史记录。", ephemeral=True); return
     except Exception as e: await interaction.followup.send(f"获取消息时出错: {e}", ephemeral=True); print(f"Error fetch msg reroll {message_id}: {e}"); return
-    # ... (后续 Reroll 逻辑不变) ...
     if not message.embeds: await interaction.followup.send("消息缺少 Embed。", ephemeral=True); return
     original_embed = message.embeds[0]
     giveaway_data = await load_giveaway_data(message_id); prize = "未知奖品"; winners_count = 1; required_role_id = None
@@ -245,7 +214,6 @@ async def giveaway_reroll(interaction: nextcord.Interaction, message_link_or_id:
 
 @giveaway_reroll.error
 async def reroll_error(interaction: nextcord.Interaction, error):
-    # ... (代码不变) ...
     if isinstance(error, commands.MissingPermissions): await interaction.response.send_message("抱歉，你没有权限执行此命令。", ephemeral=True)
     else: await interaction.response.send_message(f"执行 reroll 命令出错: {error}", ephemeral=True); print(f"Error in reroll cmd: {error}")
 
@@ -253,17 +221,14 @@ async def reroll_error(interaction: nextcord.Interaction, error):
 @commands.has_permissions(manage_guild=True)
 async def giveaway_pickwinner(interaction: nextcord.Interaction, message_link_or_id: str = ..., winner1: nextcord.Member = ..., winner2: nextcord.Member = None, winner3: nextcord.Member = None):
     await interaction.response.defer(ephemeral=True)
-    # --- 使用辅助函数解析 ---
     channel_id, message_id = await parse_message_link(interaction, message_link_or_id)
     if channel_id is None or message_id is None: return
-    # --- 获取频道和消息 ---
     target_channel = bot.get_channel(channel_id)
     if not target_channel: await interaction.followup.send("错误：无法找到链接中的频道。", ephemeral=True); return
     try: message = await target_channel.fetch_message(message_id)
     except nextcord.NotFound: await interaction.followup.send("无法找到原始抽奖消息。", ephemeral=True); return
     except nextcord.Forbidden: await interaction.followup.send(f"无权限在 {target_channel.mention} 读取历史记录。", ephemeral=True); return
     except Exception as e: await interaction.followup.send(f"获取消息时出错: {e}", ephemeral=True); print(f"Error fetch msg pickwinner {message_id}: {e}"); return
-    # ... (后续 pickwinner 逻辑不变, 使用修正后的 prize 解析) ...
     if not message.embeds: await interaction.followup.send("消息缺少 Embed。", ephemeral=True); return
     original_embed = message.embeds[0]; giveaway_data = await load_giveaway_data(message_id); prize = "未知奖品"
     if giveaway_data: prize = giveaway_data.get('prize', prize)
@@ -291,7 +256,6 @@ async def giveaway_pickwinner(interaction: nextcord.Interaction, message_link_or
 
 @giveaway_pickwinner.error
 async def pickwinner_error(interaction: nextcord.Interaction, error):
-    # ... (代码不变) ...
     if isinstance(error, commands.MissingPermissions): await interaction.response.send_message("抱歉，你没有权限执行此命令。", ephemeral=True)
     else: await interaction.response.send_message(f"执行 pickwinner 命令出错: {error}", ephemeral=True); print(f"Error in pickwinner cmd: {error}")
 
@@ -300,17 +264,14 @@ async def pickwinner_error(interaction: nextcord.Interaction, error):
 @commands.has_permissions(manage_guild=True)
 async def giveaway_end(interaction: nextcord.Interaction, message_link_or_id: str = ...):
     await interaction.response.defer(ephemeral=True)
-    # --- 使用辅助函数解析 ---
     channel_id, message_id = await parse_message_link(interaction, message_link_or_id)
     if channel_id is None or message_id is None: return
-    # --- 获取频道和消息 ---
     target_channel = bot.get_channel(channel_id)
     if not target_channel: await interaction.followup.send("错误：无法找到链接中的频道。", ephemeral=True); return
     try: message = await target_channel.fetch_message(message_id)
     except nextcord.NotFound: await interaction.followup.send("无法找到原始抽奖消息。", ephemeral=True); return
     except nextcord.Forbidden: await interaction.followup.send(f"无权限在 {target_channel.mention} 读取历史记录。", ephemeral=True); return
     except Exception as e: await interaction.followup.send(f"获取消息时出错: {e}", ephemeral=True); print(f"Error fetch msg giveaway_end {message_id}: {e}"); return
-    # ... (后续 end 逻辑不变) ...
     giveaway_data = await load_giveaway_data(message_id)
     if not giveaway_data:
         if message.embeds and ("结束" in message.embeds[0].title or (message.embeds[0].footer and "已结束" in message.embeds[0].footer.text)):
@@ -324,7 +285,6 @@ async def giveaway_end(interaction: nextcord.Interaction, message_link_or_id: st
 
 @giveaway_end.error
 async def end_error(interaction: nextcord.Interaction, error):
-    # ... (代码不变) ...
     if isinstance(error, commands.MissingPermissions): await interaction.response.send_message("抱歉，你没有权限执行此命令。", ephemeral=True)
     else: await interaction.response.send_message(f"执行 end 命令出错: {error}", ephemeral=True); print(f"Error in end cmd: {error}")
 
@@ -332,7 +292,6 @@ async def end_error(interaction: nextcord.Interaction, error):
 # --- 后台任务 ---
 @tasks.loop(seconds=15)
 async def check_giveaways():
-    # ... (代码不变, 调用 process_giveaway_end) ...
     if not redis_pool: return
     current_time = datetime.datetime.now(datetime.timezone.utc); ended_giveaway_ids = []; giveaway_ids = await get_all_giveaway_ids()
     if not giveaway_ids: return
@@ -352,13 +311,11 @@ async def check_giveaways():
 
 @check_giveaways.before_loop
 async def before_check_giveaways():
-    # ... (代码不变) ...
     await bot.wait_until_ready(); print("检查抽奖任务已准备就绪。")
 
 # --- 机器人事件 ---
 @bot.event
 async def on_ready():
-    # ... (代码不变) ...
     print("-" * 30); print(f'已登录为: {bot.user.name} ({bot.user.id})'); print(f'Nextcord 版本: {nextcord.__version__}'); print(f'运行于: {len(bot.guilds)} 个服务器')
     if not redis_pool: await setup_redis()
     redis_status = "未知"
